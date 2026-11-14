@@ -1,0 +1,5 @@
+# Pinned for reproducible CI. Dependabot keeps these current.
+boto3==1.44.3
+pytest==9.2.0
+ruff==0.17.5
+bandit==1.9.4

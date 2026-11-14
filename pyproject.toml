@@ -1,0 +1,15 @@
+# Tool configuration only - dependencies are pinned in requirements-dev.txt
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, bugbear, pyupgrade, bandit (security), ruff
+select = ["E", "W", "F", "I", "B", "UP", "S", "ISC", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # assert is how pytest works
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

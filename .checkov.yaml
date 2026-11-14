@@ -1,0 +1,36 @@
+# Checkov configuration. Every skip has a written justification - accepted
+# risks are documented, not silently ignored. Revisit before production.
+# Kubernetes manifests are scanned *after* kustomize rendering (see CI),
+# so the raw k8s/ directory is excluded here.
+framework:
+  - terraform
+  - github_actions
+  - secrets
+compact: true
+quiet: true
+skip-path:
+  - tests
+  - k8s
+skip-check:
+  # Registry modules are pinned to exact versions and updated by Dependabot.
+  # Git-SHA sources would lose that automation. (Supply-chain trade-off, ADR-0004.)
+  - CKV_TF_1
+  # AZs are selected deterministically (first 3 opt-in-not-required zones);
+  # a new AZ does not change the slice.
+  - CKV_AWS_394
+  # State bucket: versioning + KMS + TLS-only + public-access-block are in place.
+  # Access logging / event notifications / cross-region replication are
+  # production hardening steps, out of scope for a single-account lab.
+  - CKV_AWS_18
+  - CKV2_AWS_62
+  - CKV_AWS_144
+  # Kubernetes (rendered manifests):
+  # No CPU limits by design: CFS throttling hurts latency; CPU *requests* are
+  # enforced by Kyverno and guarantee fair share. Memory limits ARE enforced.
+  - CKV_K8S_11
+  # IfNotPresent + immutable pinned tags: "Always" adds a registry round-trip
+  # (and NAT data cost) on every pod start with no security benefit.
+  - CKV_K8S_15
+  # Digest pinning + signature verification is delivered in Project 2
+  # (secure supply chain). Kyverno already blocks mutable ":latest" tags.
+  - CKV_K8S_43
