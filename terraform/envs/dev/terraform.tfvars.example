@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars (git-ignored) and adjust.
+
+region      = "eu-west-2"
+environment = "dev"
+owner       = "your-name"
+
+# Your public IP: curl -s https://checkip.amazonaws.com
+endpoint_public_access_cidrs = ["203.0.113.10/32"]
+
+# Who gets cluster-admin (your SSO role / IAM user ARN):
+#   aws sts get-caller-identity --query Arn --output text
+# For an SSO session, use the role ARN, not the assumed-role session ARN:
+#   arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_abc123
+admin_principal_arns = [
+  "arn:aws:iam::123456789012:role/Admin",
+]
+
+# Set false if  already succeeds
+create_spot_service_linked_role = true
+
+budget_alert_emails = ["you@example.com"]
+monthly_budget_usd  = 75
