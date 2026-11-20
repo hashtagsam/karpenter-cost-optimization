@@ -1,0 +1,15 @@
+# Keeps pinned versions current - pinning without automated updates just
+# means slowly accumulating CVEs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+  - package-ecosystem: terraform
+    directories: [/terraform/bootstrap, /terraform/envs/dev]
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: /
+    schedule: { interval: weekly }

@@ -1,0 +1,160 @@
+# Static checks - no cloud credentials needed. Runs on every PR and push.
+# Supply-chain hygiene: every third-party action is pinned to a full commit
+# SHA (tags are mutable), and the default GITHUB_TOKEN is read-only.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TERRAFORM_VERSION: "1.17.2"
+  TFLINT_VERSION: "v0.59.1"
+  KYVERNO_VERSION: "v1.19.2"
+  KUBECONFORM_VERSION: "v0.6.7"
+  KUBECONFORM_SHA256: "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73"
+  CHECKOV_VERSION: "3.4.5"
+
+jobs:
+  terraform:
+    name: Terraform fmt / validate / tflint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -recursive -check -diff terraform
+
+      - name: terraform validate
+        run: |
+          for dir in terraform/bootstrap terraform/envs/dev; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # avoids API rate limits when fetching the ruleset
+        run: |
+          tflint --init --config="$GITHUB_WORKSPACE/.tflint.hcl"
+          for dir in terraform/bootstrap terraform/envs/dev; do
+            tflint --chdir="$dir" --config="$GITHUB_WORKSPACE/.tflint.hcl" --format=compact
+          done
+
+  kubernetes:
+    name: Manifests + policy tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install kubeconform (checksum-verified)
+        run: |
+          curl -sSfL -o /tmp/kc.tgz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kc.tgz" | sha256sum --check --strict
+          sudo tar -xzf /tmp/kc.tgz -C /usr/local/bin kubeconform
+
+      - uses: kyverno/action-install-cli@fcee92fca5c883169ef9927acf543e0b5fc58289 # v0.2.0
+        with:
+          release: ${{ env.KYVERNO_VERSION }}
+
+      - name: Schema validation (kubeconform, strict)
+        env:
+          RENDER_DIR: ${{ runner.temp }}/rendered
+        run: scripts/validate-manifests.sh
+
+      - name: Kyverno policy unit tests
+        run: scripts/policy-tests.sh
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rendered-manifests
+          path: ${{ runner.temp }}/rendered
+          retention-days: 7
+
+  security:
+    name: Security scans (Checkov, gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: kubernetes
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # full history so secret scanning covers every commit
+
+      - name: gitleaks (secrets in git history)
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Checkov
+        run: pip install "checkov==${CHECKOV_VERSION}"
+
+      - name: Checkov - Terraform, GitHub Actions, secrets
+        run: checkov -d . --config-file .checkov.yaml
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rendered-manifests
+          path: ${{ runner.temp }}/rendered
+
+      - name: Checkov - rendered Kubernetes manifests
+        run: checkov -d "${{ runner.temp }}/rendered" --framework kubernetes --config-file .checkov.yaml
+
+  python:
+    name: Python (ruff, bandit, pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check scripts tests && ruff format --check scripts tests
+      - run: bandit -q -r scripts
+      - run: python -m pytest -q
+
+  shell:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: shellcheck scripts/*.sh

@@ -1,0 +1,98 @@
+# terraform plan on every PR that touches Terraform, posted as a PR comment.
+# Auth: GitHub OIDC -> read-only "plan" role. No AWS keys stored anywhere.
+#
+# Repository variables (Settings > Secrets and variables > Actions > Variables):
+#   AWS_PLAN_ROLE_ARN, AWS_ACCOUNT_ID, AWS_REGION,
+#   TF_STATE_BUCKET, TF_STATE_KMS_KEY_ARN,
+#   TF_ENDPOINT_CIDRS     e.g. ["203.0.113.10/32"]
+#   TF_ADMIN_PRINCIPALS   e.g. ["arn:aws:iam::123456789012:role/Admin"]
+name: terraform-plan
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-*.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tf-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    # Skip until AWS is wired up, and never run for fork PRs (no OIDC for forks)
+    if: vars.AWS_PLAN_ROLE_ARN != '' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write       # mint the OIDC token for AWS
+      pull-requests: write  # post the plan as a comment
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_endpoint_public_access_cidrs: ${{ vars.TF_ENDPOINT_CIDRS }}
+      TF_VAR_admin_principal_arns: ${{ vars.TF_ADMIN_PRINCIPALS }}
+    defaults:
+      run:
+        working-directory: terraform/envs/dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          role-session-name: gha-plan-pr-${{ github.event.pull_request.number }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          mask-aws-account-id: true
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.17.2"
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="kms_key_id=${{ vars.TF_STATE_KMS_KEY_ARN }}"
+
+      - name: terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -lock=false -no-color -detailed-exitcode -out=tfplan > plan.log 2>&1
+          code=$?
+          set -e
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          cat plan.log
+          # 0 = no changes, 2 = changes; 1 = error
+          [ "$code" -ne 1 ]
+
+      - name: Comment plan on PR
+        if: always() && steps.plan.outcome != 'skipped'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const raw = fs.readFileSync('terraform/envs/dev/plan.log', 'utf8');
+            const max = 60000;  // GitHub comment limit is 65536 chars
+            const body = raw.length > max ? raw.slice(-max) : raw;
+            const marker = '<!-- tf-plan-dev -->';
+            const summary = (raw.match(/^Plan: .*$/m) || raw.match(/^No changes\..*$/m) || ['see log'])[0];
+            const comment = `${marker}\n### Terraform plan - dev\n**${summary}**\n<details><summary>Full plan</summary>\n\n\`\`\`hcl\n${body}\n\`\`\`\n</details>`;
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: context.issue.number });
+            const existing = comments.find(c => c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body: comment });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body: comment });
+            }
