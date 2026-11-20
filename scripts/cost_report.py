@@ -43,6 +43,7 @@ BOTO_CONFIG = Config(retries={"max_attempts": 8, "mode": "adaptive"}, connect_ti
 
 log = logging.getLogger("cost_report")
 
+
 @dataclass(frozen=True)
 class Node:
     instance_id: str
@@ -113,7 +114,7 @@ class PriceLookup:
         return float(history[0]["SpotPrice"])
 
 
-#---
+# ---
 def tag(instance: dict, key: str) -> str | None:
     for t in instance.get("Tags", []):
         if t["Key"] == key:
@@ -155,6 +156,7 @@ def list_cluster_nodes(cluster: str, prices: PriceLookup) -> list[Node]:
                     )
                 )
     return sorted(nodes, key=lambda n: (n.pool, n.capacity_type, n.instance_type))
+
 
 def pct_saved(actual: float, reference: float) -> float:
     return 0.0 if reference <= 0 else (1 - actual / reference) * 100
