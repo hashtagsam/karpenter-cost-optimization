@@ -1,0 +1,48 @@
+# Kyverno Helm values (chart kyverno/kyverno 3.9.x -> Kyverno 1.19)
+#
+# All Kyverno controllers run on the static system nodes. If the admission
+# webhook ran on Karpenter nodes, consolidation could evict it, and with a
+# fail-closed webhook no new pods could be created -> a deadlock.
+# Lab uses 1 admission replica; production should run 3.
+
+admissionController:
+  replicas: 1
+  nodeSelector:
+    node-role: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+  container:
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 512Mi }
+
+backgroundController:
+  nodeSelector:
+    node-role: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+reportsController:
+  nodeSelector:
+    node-role: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+cleanupController:
+  nodeSelector:
+    node-role: system
+  tolerations:
+    - key: CriticalAddonsOnly
+      operator: Exists
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }

@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podinfo
+  labels:
+    app.kubernetes.io/name: podinfo
+    team: payments
+    cost-center: cc-1042
+spec:
+  # Replicas are owned by the HPA; omitted here so `kubectl apply` never
+  # fights the autoscaler.
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 25%
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podinfo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: podinfo
+        # Cost-allocation labels -> OpenCost can charge this back to a team
+        team: payments
+        cost-center: cc-1042
+    spec:
+      serviceAccountName: podinfo
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+
+      # Restricted Pod Security Standard. The image declares a non-numeric
+      # USER ("app"), so an explicit numeric UID is required for the kubelet
+      # to verify runAsNonRoot.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Survive the loss of an AZ or a node (incl. a Spot reclaim):
+      # spread replicas across zones and hosts.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: podinfo
+        - maxSkew: 2
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: podinfo
+
+      # Explicitly target the cheap, Spot-first pool
+      nodeSelector:
+        workload-tier: general
+
+      containers:
+        - name: podinfo
+          # Pinned tag; in Project 2 this becomes a signed digest
+          image: ghcr.io/stefanprodan/podinfo:6.17.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - ./podinfo
+            - --port=9898
+            - --port-metrics=9797
+            - --level=info
+            - --data-path=/data
+          ports:
+            - name: http
+              containerPort: 9898
+            - name: http-metrics
+              containerPort: 9797
+
+          # Requests drive Karpenter's bin-packing. Memory limit = request
+          # (no overcommit, no surprise OOM of neighbours). No CPU limit on
+          # purpose: CFS throttling hurts latency and requests already
+          # guarantee a fair share.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              memory: 128Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          # Graceful drain on Spot interruption / consolidation: keep serving
+          # while the endpoint is removed from the Service, then exit.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 64Mi

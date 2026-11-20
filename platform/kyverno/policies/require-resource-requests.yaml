@@ -1,0 +1,48 @@
+# Karpenter sizes nodes from pod *requests*. A pod without requests is
+# invisible to bin-packing: nodes get over-packed (OOM kills, noisy
+# neighbours) or Karpenter launches the wrong size. A memory limit stops a
+# leaking pod from taking the whole node down.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-resource-requests
+  annotations:
+    policies.kyverno.io/title: Require CPU/memory requests and a memory limit
+    policies.kyverno.io/category: Cost Optimization, Reliability
+    policies.kyverno.io/severity: high
+spec:
+  validationActions: [Deny]
+  evaluation:
+    background:
+      enabled: true
+  # Also generate equivalent checks for workload controllers, so a bad
+  # Deployment is rejected at `kubectl apply` time, not silently at pod creation
+  autogen:
+    podControllers:
+      controllers: [deployments, statefulsets, daemonsets, jobs, cronjobs]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-node-lease, kube-public, kyverno, monitoring, opencost]
+  variables:
+    - name: containers
+      expression: "object.spec.containers + object.spec.?initContainers.orValue([])"
+  validations:
+    - expression: >-
+        variables.containers.all(c,
+          has(c.resources) && has(c.resources.requests) &&
+          'cpu' in c.resources.requests && 'memory' in c.resources.requests)
+      message: >-
+        Every container must set resources.requests.cpu and resources.requests.memory
+        (Karpenter uses requests to choose and pack nodes).
+    - expression: >-
+        variables.containers.all(c,
+          has(c.resources) && has(c.resources.limits) && 'memory' in c.resources.limits)
+      message: Every container must set resources.limits.memory.

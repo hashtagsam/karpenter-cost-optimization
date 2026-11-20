@@ -1,0 +1,23 @@
+# OpenCost: per-namespace / per-label cost allocation from Prometheus data.
+# On AWS it reads public on-demand prices without credentials. Spot prices
+# need the Spot data feed (not configured in the lab), so OpenCost
+# *overestimates* Spot nodes - scripts/cost_report.py uses live Spot prices
+# from the EC2 API to give the accurate node-level number.
+
+opencost:
+  exporter:
+    defaultClusterId: karpenter-costopt-dev
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { memory: 512Mi }
+  metrics:
+    serviceMonitor:
+      enabled: true
+  prometheus:
+    internal:
+      enabled: true
+      serviceName: kube-prometheus-stack-prometheus
+      namespaceName: monitoring
+      port: 9090
+  ui:
+    enabled: true

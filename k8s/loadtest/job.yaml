@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-load
+  labels:
+    app.kubernetes.io/name: k6
+    team: platform
+    cost-center: cc-0001
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: k6
+        team: platform
+        cost-center: cc-0001
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        runAsGroup: 12345
+        seccompProfile:
+          type: RuntimeDefault
+      # On-demand would be wasted on a load generator; it is fine on Spot
+      nodeSelector:
+        workload-tier: general
+      containers:
+        - name: k6
+          image: grafana/k6:2.4.0
+          args: ["run", "--quiet", "/scripts/script.js"]
+          env:
+            - name: TARGET_URL
+              value: http://podinfo.demo.svc.cluster.local:9898
+          resources:
+            requests:
+              cpu: "1"
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: script
+          configMap:
+            name: k6-script
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

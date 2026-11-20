@@ -1,0 +1,11 @@
+# Karpenter respects PDBs when it drains nodes for consolidation, drift or
+# expiry: at most one podinfo pod is evicted at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: podinfo
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podinfo

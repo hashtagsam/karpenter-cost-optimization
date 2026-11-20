@@ -1,0 +1,106 @@
+# Each of these MUST be rejected by the policies. Used by tests/policy-tests.sh
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: no-requests
+  namespace: demo
+spec:
+  selector: { matchLabels: { app: no-requests } }
+  template:
+    metadata: { labels: { app: no-requests, team: x, cost-center: y } }
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27.0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: latest-tag
+  namespace: demo
+spec:
+  selector: { matchLabels: { app: latest-tag } }
+  template:
+    metadata: { labels: { app: latest-tag, team: x, cost-center: y } }
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { memory: 64Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: untagged-with-registry-port
+  namespace: demo
+spec:
+  selector: { matchLabels: { app: untagged } }
+  template:
+    metadata: { labels: { app: untagged, team: x, cost-center: y } }
+    spec:
+      containers:
+        - name: app
+          image: registry.internal:5000/team/app
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { memory: 64Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sneaks-onto-critical
+  namespace: demo
+spec:
+  selector: { matchLabels: { app: sneaky } }
+  template:
+    metadata: { labels: { app: sneaky, team: x, cost-center: y } }
+    spec:
+      tolerations:
+        - key: workload-tier
+          operator: Equal
+          value: critical
+          effect: NoSchedule
+      containers:
+        - name: app
+          image: nginx:1.27.0
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { memory: 64Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tolerates-everything
+  namespace: demo
+spec:
+  selector: { matchLabels: { app: tol-all } }
+  template:
+    metadata: { labels: { app: tol-all, team: x, cost-center: y } }
+    spec:
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: app
+          image: nginx:1.27.0
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { memory: 64Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: missing-cost-labels
+  namespace: demo
+spec:
+  selector: { matchLabels: { app: nolabels } }
+  template:
+    metadata: { labels: { app: nolabels } }
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27.0
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { memory: 64Mi }

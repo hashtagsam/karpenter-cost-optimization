@@ -1,0 +1,46 @@
+# On-demand "critical" capacity costs 2-4x Spot. Stop teams from opting
+# every workload into it: only namespaces approved by the platform team
+# (label platform.example.io/tier=critical) may tolerate its taint.
+# Also blocks the "tolerate everything" bypass (operator: Exists, no key).
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: restrict-critical-nodepool
+  annotations:
+    policies.kyverno.io/title: Restrict use of the on-demand critical NodePool
+    policies.kyverno.io/category: Cost Optimization
+    policies.kyverno.io/severity: medium
+spec:
+  validationActions: [Deny]
+  evaluation:
+    background:
+      enabled: true
+  autogen:
+    podControllers:
+      controllers: [deployments, statefulsets, daemonsets, jobs, cronjobs]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-node-lease, kube-public, kyverno, monitoring, opencost]
+  variables:
+    - name: toleratesCritical
+      expression: >-
+        object.spec.?tolerations.orValue([]).exists(t,
+          (t.?key.orValue('') == '' && t.?operator.orValue('Equal') == 'Exists') ||
+          (t.?key.orValue('') == 'workload-tier' &&
+            (t.?operator.orValue('Equal') == 'Exists' || t.?value.orValue('') == 'critical')))
+    - name: namespaceTier
+      expression: >-
+        namespaceObject.?metadata.?labels.orValue({})[?'platform.example.io/tier'].orValue('')
+  validations:
+    - expression: "!variables.toleratesCritical || variables.namespaceTier == 'critical'"
+      messageExpression: >-
+        'Namespace ' + request.namespace + ' is not approved for the on-demand
+        critical NodePool (needs label platform.example.io/tier=critical).'

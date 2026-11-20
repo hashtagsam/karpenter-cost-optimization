@@ -1,0 +1,78 @@
+# kube-prometheus-stack values - lab sizing.
+# Grafana is NOT exposed: access it with `make grafana` (port-forward).
+
+crds:
+  enabled: true
+
+alertmanager:
+  # Lab: alerts are visible in Prometheus/Grafana. In prod route to PagerDuty/Slack.
+  enabled: false
+
+grafana:
+  admin:
+    # Random password created by `make monitoring`; never the chart default
+    existingSecret: grafana-admin
+    userKey: admin-user
+    # checkov:skip=CKV_SECRET_6:This is the *name* of a key in a Secret, not a password
+    passwordKey: admin-password
+  service:
+    type: ClusterIP
+  defaultDashboardsTimezone: utc
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: karpenter
+          orgId: 1
+          folder: Karpenter
+          type: file
+          disableDeletion: true
+          editable: false
+          options:
+            path: /var/lib/grafana/dashboards/karpenter
+  dashboards:
+    karpenter:
+      # Upstream Karpenter dashboards, pinned to the Karpenter release tag
+      capacity:
+        url: https://raw.githubusercontent.com/aws/karpenter-provider-aws/v1.15.2/website/content/en/preview/getting-started/getting-started-with-karpenter/karpenter-capacity-dashboard.json
+        datasource: Prometheus
+      performance:
+        url: https://raw.githubusercontent.com/aws/karpenter-provider-aws/v1.15.2/website/content/en/preview/getting-started/getting-started-with-karpenter/karpenter-performance-dashboard.json
+        datasource: Prometheus
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    # Pick up ServiceMonitors/PrometheusRules from any namespace/release
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: 250m, memory: 1Gi }
+      limits: { memory: 2Gi }
+    # Lab: emptyDir storage (no EBS CSI driver needed). Because the TSDB
+    # would be lost if consolidation moved the pod mid-demo, we opt
+    # Prometheus out of voluntary disruption. Karpenter will not drain a
+    # node running a pod with this annotation (Spot interruptions and
+    # expireAfter still apply). Prod: EBS CSI + PVC, or Amazon Managed Prometheus.
+    podMetadata:
+      annotations:
+        karpenter.sh/do-not-disrupt: "true"
+
+prometheusOperator:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+# EKS manages the control plane; these targets are not scrapeable
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false

@@ -1,0 +1,66 @@
+# Scrape Karpenter (installed before the Prometheus CRDs existed) and alert
+# on the conditions that matter for a cost-optimised cluster.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: karpenter
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [kube-system]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: karpenter
+  endpoints:
+    - port: http-metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: karpenter-cost-guardrails
+  namespace: monitoring
+spec:
+  groups:
+    - name: karpenter.cost
+      rules:
+        # A NodePool close to its cost limit will soon leave pods Pending
+        - alert: KarpenterNodePoolNearLimit
+          expr: |
+            max by (nodepool, resource_type) (karpenter_nodepools_usage)
+              / max by (nodepool, resource_type) (karpenter_nodepools_limit) > 0.8
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "NodePool {{ $labels.nodepool }} is above 80% of its {{ $labels.resource_type }} limit"
+            runbook: "docs/runbook.md#nodepool-near-limit"
+
+        # Consolidation thrashing: savings eaten by restarts and cold caches
+        - alert: KarpenterHighNodeChurn
+          expr: sum by (nodepool, reason) (increase(karpenter_nodeclaims_disrupted_total[1h])) > 20
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High node churn in {{ $labels.nodepool }} (reason={{ $labels.reason }})"
+            runbook: "docs/runbook.md#high-node-churn"
+
+        # A wave of Spot interruptions: consider widening the instance menu
+        - alert: KarpenterInterruptionSpike
+          expr: sum by (message_type) (increase(karpenter_interruption_received_messages_total[30m])) > 5
+          labels:
+            severity: info
+          annotations:
+            summary: "{{ $value }} interruption messages ({{ $labels.message_type }}) in 30m"
+            runbook: "docs/runbook.md#spot-interruption-spike"
+
+        # The thing Karpenter exists to prevent
+        - alert: PodsPendingTooLong
+          expr: sum by (namespace) (kube_pod_status_phase{phase="Pending"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pods pending >10m in {{ $labels.namespace }}"
+            runbook: "docs/runbook.md#pods-pending"
