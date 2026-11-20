@@ -1,0 +1,67 @@
+# EC2NodeClass: HOW nodes are built (AMI, network, storage, hardening).
+# Rendered with envsubst by `make nodepools`:
+#   ${CLUSTER_NAME} ${KARPENTER_NODE_ROLE} ${AMI_ALIAS} ${PROJECT} ${ENVIRONMENT} ${COST_CENTER}
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  role: ${KARPENTER_NODE_ROLE}
+
+  # Bottlerocket: minimal, immutable, container-only OS with SELinux enforcing
+  # and dm-verity root filesystem. Pin the version in prod (e.g. bottlerocket@v1.x.y)
+  # and roll it forward deliberately; Karpenter replaces nodes on drift.
+  amiSelectorTerms:
+    - alias: ${AMI_ALIAS}
+
+  # Private subnets / node SG only - discovered by tags set in Terraform
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${CLUSTER_NAME}
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${CLUSTER_NAME}
+  associatePublicIPAddress: false
+
+  # IMDSv2 only; hop limit 1 so pods cannot reach the node's instance
+  # credentials (pods get AWS access through Pod Identity instead).
+  metadataOptions:
+    httpEndpoint: enabled
+    httpProtocolIPv6: disabled
+    httpPutResponseHopLimit: 1
+    httpTokens: required
+
+  # Bottlerocket uses two volumes: OS (xvda) and data/images (xvdb).
+  # gp3 is ~20% cheaper per GB than gp2 with better baseline IOPS.
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 4Gi
+        volumeType: gp3
+        encrypted: true
+        deleteOnTermination: true
+    - deviceName: /dev/xvdb
+      ebs:
+        volumeSize: 30Gi
+        volumeType: gp3
+        encrypted: true
+        deleteOnTermination: true
+
+  # Bottlerocket settings (TOML), merged with what Karpenter generates.
+  # No SSH/admin container; access is via SSM (control container) only.
+  userData: |
+    [settings.host-containers.admin]
+    enabled = false
+
+    [settings.host-containers.control]
+    enabled = true
+
+    [settings.kernel]
+    lockdown = "integrity"
+
+  # Propagated to instances, volumes and ENIs -> cost allocation per project
+  tags:
+    Project: ${PROJECT}
+    Environment: ${ENVIRONMENT}
+    CostCenter: ${COST_CENTER}
+    ManagedBy: karpenter

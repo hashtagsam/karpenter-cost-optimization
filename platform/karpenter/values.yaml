@@ -1,0 +1,39 @@
+# Karpenter Helm values (chart: oci://public.ecr.aws/karpenter/karpenter)
+# Cluster-specific settings (clusterName, interruptionQueue) are passed with
+# --set by `make karpenter` from Terraform outputs.
+#
+# Chart defaults we deliberately keep (verified against chart v1.15.2):
+#  - container runs as UID 65532, non-root, read-only root FS, ALL caps dropped,
+#    no privilege escalation; pod seccomp RuntimeDefault
+#  - priorityClassName: system-cluster-critical
+#  - zone topology spread + PDB (maxUnavailable: 1)
+#  - node affinity that keeps the controller OFF Karpenter-managed nodes
+
+replicas: 2
+
+# Run ONLY on the static system node group
+nodeSelector:
+  karpenter.sh/controller: "true"
+
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+
+logLevel: info
+
+controller:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+settings:
+  # Pod Identity supplies AWS credentials (terraform/envs/dev/karpenter.tf),
+  # so the service account needs no IRSA annotation.
+  featureGates:
+    # Spot->cheaper-Spot replacement. Off: extra savings are small and it
+    # increases churn. Worth evaluating once PDB coverage is mature.
+    spotToSpotConsolidation: false

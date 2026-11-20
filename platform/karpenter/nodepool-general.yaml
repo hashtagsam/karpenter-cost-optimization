@@ -1,0 +1,74 @@
+# NodePool "general": WHAT capacity stateless workloads may run on.
+# Strategy: flexible + Spot-first. The wider the instance menu, the deeper
+# the Spot pools Karpenter can pick from and the lower the interruption rate.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: general
+spec:
+  # Higher weight = tried first when a pod fits multiple NodePools
+  weight: 50
+
+  template:
+    metadata:
+      labels:
+        workload-tier: general
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+
+      requirements:
+        # Spot AND on-demand allowed: Karpenter picks Spot when available
+        # (price-capacity-optimized) and falls back to on-demand if Spot
+        # capacity is exhausted - availability is never traded for cost.
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]
+        # Graviton (arm64) is typically ~20% cheaper per vCPU. Requires
+        # multi-arch images (podinfo, k6 and the monitoring stack all are).
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["arm64", "amd64"]
+        - key: kubernetes.io/os
+          operator: In
+          values: ["linux"]
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        # Gen 6+ only: Nitro, better price/performance than older families
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values: ["5"]
+        # No tiny instances (DaemonSet overhead dominates) and no metal
+        - key: karpenter.k8s.aws/instance-size
+          operator: NotIn
+          values: ["nano", "micro", "small", "medium", "metal"]
+        # Cap node size so one Spot reclaim never takes out too many pods
+        - key: karpenter.k8s.aws/instance-cpu
+          operator: Lt
+          values: ["33"]
+
+      # Recycle every node at least every 30 days -> fresh, patched AMIs
+      # even if nobody touches the cluster (security hygiene).
+      expireAfter: 720h
+      # Hard upper bound for draining a node once disruption starts
+      terminationGracePeriod: 1h
+
+  # Cost guardrail: a runaway HPA or a bad deploy cannot scale past this
+  limits:
+    cpu: "64"
+    memory: 256Gi
+
+  disruption:
+    # Remove empty nodes AND repack under-utilised ones onto cheaper capacity.
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    # Short for a visible demo. In prod 5-15m avoids churn on spiky traffic.
+    consolidateAfter: 2m
+    budgets:
+      # Never voluntarily disrupt more than 20% of this pool at once
+      - nodes: "20%"
+      # AMI roll-outs (drift) go slower than cost-driven moves
+      - nodes: "10%"
+        reasons: ["Drifted"]
